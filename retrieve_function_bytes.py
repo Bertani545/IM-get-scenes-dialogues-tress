@@ -69,3 +69,35 @@ class SceneFunctionsWrapper:
 		func_bytes = self.data[func_offset:func_end]
 
 		return func_va, func_name, func_bytes
+
+
+
+	def read_u32_at_va(self, va: int) -> int:
+	    offset = self.va_to_offset(va)
+
+	    if offset + 4 > len(self.data):
+	        raise ValueError(
+	            f"Cannot read u32 at VA {hex(va)}"
+	        )
+
+	    return struct.unpack_from("<I", self.data, offset)[0]
+
+	    
+	def read_switch_table(
+	    self,
+	    table_va: int,
+	    first_case: int = -1,
+	    last_case: int = 0xE,
+	) -> dict[int, int]:
+
+	    cases = {}
+
+	    for case in range(first_case, last_case + 1):
+	        index = case - first_case
+
+	        entry_va = table_va + index * 4
+	        target_va = self.read_u32_at_va(entry_va)
+
+	        cases[case] = target_va
+
+	    return cases

@@ -1,4 +1,5 @@
 VA_OFFSET = 0xFFF80
+
 # Virtual Addresses of these functions
 interesting_jals = {
 	0x133700, #Black dialogue

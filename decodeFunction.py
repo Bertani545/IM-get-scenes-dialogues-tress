@@ -3,6 +3,7 @@ from typing import Optional
 from capstone import Cs, CS_ARCH_MIPS, CS_MODE_MIPS64, CS_MODE_LITTLE_ENDIAN
 
 
+
 @dataclass
 class DecodedInstruction:
     address: int
@@ -16,11 +17,15 @@ class DecodedInstruction:
     immediate: Optional[int] = None
     jump_target: Optional[int] = None
 
+    tracked: bool = False
+
     def __str__(self):
         return (
             f"{self.address:08X}: "
             f"{self.mnemonic:<8} {self.op_str:<25} "
-            f"[{self.kind}]"
+            f"[{self.kind}] "
+            f"immediate = {hex(self.immediate) if self.immediate is not None else None} "
+            f"Tracked: {self.tracked}"
         )
 
 
@@ -63,18 +68,25 @@ class MIPSDecoder:
                     # of the functions we are interested in.
                     if mnemonic == "jal":
 
-                        if jump_target is not None and jump_target in interesting_jals:
-                            instructions.append(
-                                DecodedInstruction(
-                                    address=insn.address,
-                                    mnemonic=insn.mnemonic,
-                                    op_str=insn.op_str,
-                                    bytes=bytes(insn.bytes),
-                                    kind="jal",
-                                    jump_target=jump_target,
-                                    source_registers=self._get_source_registers(insn)
-                                )
+                        is_insteresting = (
+                            jump_target is not None 
+                            and jump_target in interesting_jals
+                        )
+
+                        
+                        instructions.append(
+                            DecodedInstruction(
+                                address=insn.address,
+                                mnemonic=insn.mnemonic,
+                                op_str=insn.op_str,
+                                bytes=bytes(insn.bytes),
+                                kind="jal",
+                                jump_target=jump_target,
+                                source_registers=self._get_source_registers(insn),
+                                immediate=self._get_immediate(insn),
+                                tracked = is_insteresting,
                             )
+                        )
 
                         continue
 
@@ -89,7 +101,9 @@ class MIPSDecoder:
                             bytes=bytes(insn.bytes),
                             kind=kind,
                             jump_target=jump_target,
-                            source_registers=self._get_source_registers(insn)
+                            source_registers=self._get_source_registers(insn),
+                            immediate=self._get_immediate(insn),
+                            tracked = True,
                         )
                     )
 
@@ -111,11 +125,36 @@ class MIPSDecoder:
                             bytes=bytes(insn.bytes),
                             kind="register_write",
                             writes_register=written_register,
-                            source_registers=self._get_source_registers(insn)
+                            source_registers=self._get_source_registers(insn),
+                            immediate=self._get_immediate(insn),
+                            tracked = True,
                         )
                     )
                     continue
-            
+
+
+                # Default
+                instructions.append(
+                    DecodedInstruction(
+                        address=insn.address,
+                        mnemonic=insn.mnemonic,
+                        op_str=insn.op_str,
+                        bytes=bytes(insn.bytes),
+                        kind="other",
+                        tracked = False,
+                    )
+                )
+            else:
+                instructions.append(
+                    DecodedInstruction(
+                        address=insn.address,
+                        mnemonic=insn.mnemonic,
+                        op_str=insn.op_str,
+                        bytes=bytes(insn.bytes),
+                        kind="other",
+                        tracked = False,
+                    )
+                )
 
         return instructions
 
@@ -176,6 +215,13 @@ class MIPSDecoder:
 
         return "branch"
 
+    def _get_immediate(self, insn) -> Optional[int]:
+        for operand in insn.operands:
+            if operand.type == 2:  # MIPS immediate
+                return operand.imm
+
+        return None
+
     # -----------------------------------------------------------------
     # Get branch/jump destination
     # -----------------------------------------------------------------
@@ -195,29 +241,38 @@ class MIPSDecoder:
 
 
     def _get_source_registers(self, insn) -> list[str]:
-        """
-        Returns the GPRs read by an instruction.
-
-        We deliberately use the operand structure rather than parsing
-        op_str, since Capstone may represent pseudo-instructions
-        differently.
-        """
-
         sources = []
 
         for i, operand in enumerate(insn.operands):
 
-            if operand.type != 1:  # MIPS register
-                continue
+            # Normal register operand
+            if operand.type == 1:
+                reg = insn.reg_name(operand.reg)
 
-            reg = insn.reg_name(operand.reg)
+                # First operand is the destination for our
+                # register-writing instructions.
+                if (
+                    i == 0
+                    and insn.mnemonic.lower() in REGISTER_WRITE_INSTRUCTIONS
+                ):
+                    continue
 
-            # The first operand of our register-writing instructions
-            # is normally the destination.
-            if i == 0 and insn.mnemonic.lower() in REGISTER_WRITE_INSTRUCTIONS:
-                continue
+                sources.append(reg)
 
-            sources.append(reg)
+            # Memory operand
+            elif operand.type == 3:
+                # MIPS memory operand:
+                #   base + displacement
+                #
+                # Example:
+                #   lw $v0, 0($v0)
+                #
+                # operand.mem.base is the base register.
+
+                base = operand.mem.base
+
+                if base != 0:
+                    sources.append(insn.reg_name(base))
 
         return sources
 
@@ -234,10 +289,10 @@ class MIPSDecoder:
             load = instructions[i]
             jump = instructions[i + 1]
 
-            # Must be:
+            # Must end with:
             #
-            #   lw  $reg, 0($reg)
-            #   jr  $reg
+            #     lw   $reg, 0($reg)
+            #     jr   $reg
             #
 
             if load.mnemonic not in {"lw", "lwu", "ld"}:
@@ -251,15 +306,18 @@ class MIPSDecoder:
 
             target_reg = load.writes_register
 
-            # jr must use the register loaded above.
-            if target_reg not in jump.source_registers:
+            # A normal function return:
+            #
+            #     ld  $ra, ...
+            #     jr  $ra
+            #
+            # is not a switch.
+            if target_reg == "ra":
                 continue
 
-            # We specifically want offset 0 here.
-            if load.op_str.split(",")[1].strip() not in {
-                f"0({target_reg})",
-                f"0x0({target_reg})",
-            }:
+            # The register loaded by the LW must be the
+            # register used by JR.
+            if target_reg not in jump.source_registers:
                 continue
 
             switches.append({
@@ -269,7 +327,191 @@ class MIPSDecoder:
             })
 
         return switches
-        
+
+    def find_switch_table_base(
+        self,
+        instructions: list[DecodedInstruction],
+        load_index: int,
+        address_register: str,
+    ) -> Optional[int]:
+
+        # Search backwards from the LW.
+        for i in range(load_index - 1, max(-1, load_index - 10), -1):
+
+            insn = instructions[i]
+
+            # We are looking for:
+            #
+            #     addu address_reg, index_reg, base_reg
+            #
+            if insn.mnemonic in {"addu", "daddu"}:
+                if insn.writes_register != address_register:
+                    continue
+
+                # We need to inspect its source registers.
+                if len(insn.source_registers) != 2:
+                    continue
+
+                # One source should be the index/address register.
+                if address_register not in insn.source_registers:
+                    continue
+
+                # The other source is the table-base register.
+                base_register = next(
+                    r for r in insn.source_registers
+                    if r != address_register
+                )
+
+                # Now search backwards for construction of base_register.
+                table_base = self._resolve_register_constant(
+                    instructions,
+                    i,
+                    base_register,
+                )
+
+                if table_base is not None:
+                    return table_base
+
+        return None
+
+    def find_switches(
+        self,
+        instructions: list[DecodedInstruction],
+    ):
+        switches = []
+
+        for i in range(len(instructions) - 1):
+
+            load = instructions[i]
+            jump = instructions[i + 1]
+
+            # ---------------------------------------------------------
+            # Look for:
+            #
+            #     lw   $reg, ($reg)
+            #     jr   $reg
+            # ---------------------------------------------------------
+
+            if load.mnemonic not in {"lw", "lwu", "ld"}:
+                continue
+
+            if jump.mnemonic != "jr":
+                continue
+
+            if load.writes_register is None:
+                continue
+
+            target_reg = load.writes_register
+
+            # Normal function return.
+            if target_reg == "ra":
+                continue
+
+            # The register loaded by the LW must be the register
+            # used by JR.
+            if target_reg not in jump.source_registers:
+                continue
+
+            # ---------------------------------------------------------
+            # Find the address calculation immediately before the LW.
+            #
+            #     addu target_reg, target_reg, base_reg
+            #
+            # ---------------------------------------------------------
+
+            table_base = None
+            base_register = None
+
+            for j in range(i - 1, max(-1, i - 10), -1):
+
+                calc = instructions[j]
+
+                if calc.mnemonic not in {"addu", "daddu"}:
+                    continue
+
+                if calc.writes_register != target_reg:
+                    continue
+
+                if target_reg not in calc.source_registers:
+                    continue
+
+                # The other source register is the table-base register.
+                other_registers = [
+                    r for r in calc.source_registers
+                    if r != target_reg
+                ]
+
+                if len(other_registers) != 1:
+                    continue
+
+                base_register = other_registers[0]
+
+                table_base = self._resolve_register_constant(
+                    instructions,
+                    j,
+                    base_register,
+                )
+
+                if table_base is not None:
+                    break
+
+            if table_base is None:
+                continue
+
+            switches.append({
+                "jump_address": jump.address,
+                "load_address": load.address,
+                "target_register": target_reg,
+                "index_register": target_reg,
+                "table_base": table_base,
+                "table_base_register": base_register,
+            })
+
+        return switches
+
+
+    def _resolve_register_constant(
+        self,
+        instructions: list[DecodedInstruction],
+        before_index: int,
+        register: str,
+    ) -> Optional[int]:
+
+        addend = 0
+
+        for i in range(before_index - 1, max(-1, before_index - 10), -1):
+
+            insn = instructions[i]
+
+            if insn.writes_register != register:
+                continue
+
+            # addiu reg, reg, imm
+            if (
+                insn.mnemonic == "addiu"
+                and register in insn.source_registers
+            ):
+                if insn.immediate is None:
+                    return None
+
+                addend += insn.immediate
+                continue
+
+            # lui reg, imm
+            if insn.mnemonic == "lui":
+                if insn.immediate is None:
+                    return None
+
+                return ((insn.immediate << 16) + addend) & 0xFFFFFFFF
+
+            # Something else overwrote the register.
+            return None
+
+        return None
+
+
+    
+
 
     # -----------------------------------------------------------------
     # Find destination integer register
@@ -292,7 +534,6 @@ class MIPSDecoder:
             return insn.reg_name(first_operand.reg)
 
         return None
-
 
 REGISTER_WRITE_INSTRUCTIONS = {
     # Arithmetic
