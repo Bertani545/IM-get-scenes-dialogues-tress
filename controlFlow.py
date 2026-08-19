@@ -96,13 +96,20 @@ class ExecutionNode:
 
         self.children = []
         self.parents = []
-
+    '''
     def add_child(self, child):
         if child not in self.children:
             self.children.append(child)
 
         if self not in child.parents:
             child.parents.append(self)
+    '''
+    def add_child(self, child: "ExecutionNode"):
+        for existing in self.children:
+            if existing.address == child.address:
+                return
+
+        self.children.append(child)
 
 
 
@@ -410,6 +417,8 @@ class ControlFlowAnalyzer:
 
         if existing is not None:
 
+            old_registers = existing.registers
+
             merged = merge_registers(
                 existing.registers,
                 registers,
@@ -518,14 +527,22 @@ class ControlFlowAnalyzer:
 
             node = worklist.pop()
 
-            for successor, changed in self.process_node(node):
+            successors = self.process_node(node)
+            '''
+            print(
+                f"{node.address:08X} -> "
+                f"{[(hex(child.address), changed) for child, changed in successors]}"
+            )
+            '''
+
+            for successor, changed in successors:
 
                 if changed:
                     worklist.append(successor)
 
         return root
 
-
+    
     def process_branch(
         self,
         node: ExecutionNode,
@@ -562,18 +579,25 @@ class ControlFlowAnalyzer:
 
         fallthrough_address = node.address + 8
 
-        fallthrough, changed = self.get_or_create_node(
-            parent=node,
-            address=fallthrough_address,
-            registers=registers,
-        )
+        if fallthrough_address in self.instructions_by_va:
 
-        successors.append(
-            (fallthrough, changed)
+            child, changed = self.get_or_create_node(
+                parent=node,
+                address=fallthrough_address,
+                registers=copy_registers(registers),
+            )
+
+            successors.append((child, changed))
+
+
+        print(
+            f"BRANCH {node.address:08X} CHILDREN:",
+            [f"{child.address:08X}" for child in node.children]
         )
 
         return successors
-
+        return successors
+    
 
 
     def process_jal(
@@ -770,6 +794,54 @@ def print_graph(root: ExecutionNode):
 #--------------------------------------------------------------------------#
 MASK32 = 0xFFFFFFFF
 MASK64 = 0xFFFFFFFFFFFFFFFF
+
+def write_high16(
+    registers: dict[str, RegisterState],
+    register: str,
+    value: int,
+    insn: DecodedInstruction,
+):
+    if register == "zero":
+        return
+
+    state = registers[register]
+
+    if value is UNKNOWN:
+        state.value = UNKNOWN
+        state.high_instruction = insn
+        state.low_instruction = None
+        return
+
+    state.value = (
+        (value & 0xFFFF) << 16
+    ) & MASK32
+
+    state.high_instruction = insn
+    state.low_instruction = None
+
+
+def write_addiu(
+    registers: dict[str, RegisterState],
+    register: str,
+    value: int | object,
+    insn: DecodedInstruction,
+):
+    if register == "zero":
+        return
+
+    state = registers[register]
+
+    if value is UNKNOWN:
+        state.value = UNKNOWN
+        state.low_instruction = insn
+        state.high_instruction = None
+        return
+
+    value &= MASK32
+
+    state.value = value
+    state.low_instruction = insn
+
 def sign_extend_32(value: int) -> int:
     if value is UNKNOWN:
         return UNKNOWN
@@ -803,6 +875,7 @@ def write_low32(
         state.value = UNKNOWN
 
     state.low_instruction = insn
+    state.high_instruction = insn
 
 def write_64(
     registers: dict[str, RegisterState],
@@ -834,6 +907,7 @@ def write_unknown_low32(
 
     state.value = None
     state.low_instruction = insn
+    state.high_instruction = insn
 
 def write_64_unknown(
     registers: dict[str, RegisterState],
@@ -882,14 +956,10 @@ def execute_instruction(
                 print(insn)
                 return new_registers
 
-            value = (
-                insn.immediate << 16
-            ) & MASK32
-
-            write_low32(
+            write_high16(
                 new_registers,
                 dest,
-                value,
+                insn.immediate,
                 insn,
             )
 
@@ -914,7 +984,6 @@ def execute_instruction(
                 return new_registers
 
             source = sources[0]
-
             source_value = new_registers[source].value
 
             if unknown_if_any(source_value):
@@ -925,7 +994,7 @@ def execute_instruction(
                     insn.immediate
                 ) & MASK32
 
-            write_low32(
+            write_addiu(
                 new_registers,
                 dest,
                 result,
