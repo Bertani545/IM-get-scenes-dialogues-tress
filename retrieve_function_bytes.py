@@ -26,7 +26,15 @@ class SceneFunctionsWrapper:
 		end = self.data.find(b'\x00', offset)
 		if end == -1:
 			raise ValueError(f"Null-terminator not found for string at VA {hex(va)}")
-		return self.data[offset:end].decode('ascii', errors='replace')
+		return self.data[offset:end].decode('shift_jis', errors='replace')
+
+
+	def get_dialogue_at(self, va: str|int):
+		print(va)
+		if type(va) is str:
+			va = int(va,16)
+		self.read_string_at_va(va)
+
 
 	def get_function_info(self, index: int):
 		"""

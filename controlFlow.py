@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 from decodeFunction import DecodedInstruction
 from typing import Optional
-
+from constants import check_if_important_jal, function_registers, check_if_important_jal_int
+from retrieve_function_bytes import SceneFunctionsWrapper
+import struct
 
 class UnknownValue:
     def __repr__(self):
@@ -67,20 +69,14 @@ class RegisterState:
     high_instruction: object = None
 
 
-'''
-class ExecutionNode:
-    address: int
-
+@dataclass
+class FunctionCall:
+    call_address: int
+    function_address: int
     registers: dict[str, RegisterState]
 
-    instruction: Optional[DecodedInstruction] = None
 
-    parent: Optional["ExecutionNode"] = None
 
-    children: list["ExecutionNode"] = field(
-        default_factory=list
-    )
-'''
 @dataclass
 class ExecutionNode:
 
@@ -111,7 +107,34 @@ class ExecutionNode:
 
         self.children.append(child)
 
+'''
+@dataclass
+class CallNode:
+    address: int
+    function_address: int
+    registers: dict[str, RegisterState]
 
+    # Edges to other important calls
+    children: list["CallNode"] = field(default_factory=list)
+
+    execution_node: ExecutionNode | None = None
+
+    def add_child(self, child: "CallNode"):
+
+        for existing in self.children:
+            if existing.address == child.address:
+                return
+
+        self.children.append(child)
+'''
+@dataclass
+class CallNode:
+    call: FunctionCall
+    children: list["CallNode"] = field(default_factory=list)
+
+    def add_child(self, child: "CallNode"):
+        if child not in self.children:
+            self.children.append(child)
 
 def create_initial_register_state() -> dict[str, RegisterState]:
     return {
@@ -131,6 +154,14 @@ def copy_register_state(
         )
         for register, state in registers.items()
     }
+
+def copy_one_register(state: RegisterState):
+    return RegisterState(
+            value=state.value,
+            low_instruction=state.low_instruction,
+            high_instruction=state.high_instruction,
+        )
+
 
 def merge_value(a, b):
     if a is UNKNOWN or b is UNKNOWN:
@@ -386,13 +417,25 @@ class ControlFlowAnalyzer:
     def __init__(
         self,
         instructions: list[DecodedInstruction],
+        wrapper
     ):
         self.instructions_by_va = {
             insn.address: insn
             for insn in instructions
         }
+        self.wrapper = wrapper
 
         self.nodes_by_va: dict[int, ExecutionNode] = {}
+
+        self.switches = self.find_switches(instructions)
+        self.switches_by_jump_va = {
+            switch["jump_address"] : switch
+            for switch in self.switches
+        }
+
+        self.function_calls = []
+        self.call_nodes_by_address = {}
+        self.call_graph_root = None
 
 
     def get_or_create_node(
@@ -543,6 +586,34 @@ class ControlFlowAnalyzer:
         return root
 
     
+    def get_state_after_delay_slot(
+        self,
+        node: ExecutionNode,
+    ) -> dict[str, RegisterState]:
+
+        if node.instruction is None:
+            return copy_registers(node.registers)
+
+        delay_address = node.address + 4
+
+        delay_insn = self.instructions_by_va.get(delay_address)
+
+        if delay_insn is None:
+            raise ValueError(
+                f"Missing delay slot at {delay_address:08X}"
+            )
+
+        registers = copy_registers(node.registers)
+
+        if delay_insn.kind == "register_write":
+            registers = execute_instruction(
+                registers,
+                delay_insn,
+            )
+
+        return registers
+
+
     def process_branch(
         self,
         node: ExecutionNode,
@@ -589,28 +660,28 @@ class ControlFlowAnalyzer:
 
             successors.append((child, changed))
 
-
+        '''
         print(
             f"BRANCH {node.address:08X} CHILDREN:",
             [f"{child.address:08X}" for child in node.children]
         )
+        '''
 
         return successors
         return successors
     
 
 
-    def process_jal(
-        self,
-        node: ExecutionNode,
-    ):
+    def process_jal(self, node: ExecutionNode):
+
         insn = node.instruction
+
+        if insn is None or insn.kind != "jal":
+            return []
 
         # Execute the JAL delay slot.
         registers = self.execute_delay_slot(node)
-
-        # We do NOT follow insn.jump_target.
-        # The called function is outside this traversal.
+        state_after_slot = self.get_state_after_delay_slot(node)
 
         next_address = node.address + 8
 
@@ -627,9 +698,43 @@ class ControlFlowAnalyzer:
             registers=registers,
         )
 
+
+        function_address = insn.jump_target
+
+        if check_if_important_jal_int(function_address):
+            # ---------------------------------------------------------
+            # Extract only the registers required by this function
+            # ---------------------------------------------------------
+
+            required_registers = function_registers[
+                function_address
+            ]
+
+            call_registers = {
+                register: copy_one_register(
+                    state_after_slot[register]
+                )
+                for register in required_registers
+            }
+
+            # ---------------------------------------------------------
+            # Save the call
+            # ---------------------------------------------------------
+
+            call = FunctionCall(
+                call_address=insn.address,
+                function_address=function_address,
+                registers=call_registers,
+            )
+
+            self.function_calls.append(call)
+
+
+
+            
         return [
-            (child, changed)
-        ]
+                (child, changed)
+            ] 
 
     def process_goto(
         self,
@@ -669,15 +774,347 @@ class ControlFlowAnalyzer:
 
         return []
 
+    def _resolve_register_constant(
+        self,
+        instructions: list[DecodedInstruction],
+        before_index: int,
+        register: str,
+    ) -> Optional[int]:
+
+        addend = 0
+
+        for i in range(
+            before_index - 1,
+            max(-1, before_index - 10),
+            -1
+        ):
+
+            insn = instructions[i]
+
+            if insn.writes_register != register:
+                continue
+
+            # addiu reg, reg, imm
+            if (
+                insn.mnemonic == "addiu"
+                and register in insn.source_registers
+            ):
+
+                if insn.immediate is None:
+                    return None
+
+                addend += insn.immediate
+                continue
+
+            # lui reg, imm
+            if insn.mnemonic == "lui":
+
+                if insn.immediate is None:
+                    return None
+
+                return (
+                    (insn.immediate << 16) + addend
+                ) & 0xFFFFFFFF
+
+            # Something else overwrote the register.
+            return None
+
+        return None
+
+    def find_switch_table_base(
+        self,
+        instructions: list[DecodedInstruction],
+        load_index: int,
+        address_register: str,
+    ) -> Optional[int]:
+
+        # Search backwards from the LW.
+        for i in range(
+            load_index - 1,
+            max(-1, load_index - 10),
+            -1
+        ):
+
+            insn = instructions[i]
+
+            # We are looking for:
+            #
+            #     addu address_reg, index_reg, base_reg
+            #
+            if insn.mnemonic not in {"addu", "daddu"}:
+                continue
+
+            if insn.writes_register != address_register:
+                continue
+
+            if len(insn.source_registers) != 2:
+                continue
+
+            if address_register not in insn.source_registers:
+                continue
+
+            # The other source is the table-base register.
+            base_register = next(
+                r for r in insn.source_registers
+                if r != address_register
+            )
+
+            table_base = self._resolve_register_constant(
+                instructions,
+                i,
+                base_register,
+            )
+
+            if table_base is not None:
+                return table_base
+
+        return Nones
+
+    def find_switches(
+        self,
+        instructions: list[DecodedInstruction],
+    ):
+
+        switches = []
+
+        for i in range(len(instructions) - 1):
+
+            load = instructions[i]
+            jump = instructions[i + 1]
+
+            # ---------------------------------------------------------
+            # Look for:
+            #
+            #     lw   $reg, ($reg)
+            #     jr   $reg
+            # ---------------------------------------------------------
+
+            if load.mnemonic not in {"lw", "lwu", "ld"}:
+                continue
+
+            if jump.mnemonic != "jr":
+                continue
+
+            if load.writes_register is None:
+                continue
+
+            target_reg = load.writes_register
+
+            # jr ra is a normal function return.
+            if target_reg == "ra":
+                continue
+
+            # The register loaded by LW must be the register
+            # used by JR.
+            if target_reg not in jump.source_registers:
+                continue
+
+            # ---------------------------------------------------------
+            # Find the address calculation before LW:
+            #
+            #     addu target_reg, target_reg, base_reg
+            #
+            # ---------------------------------------------------------
+
+            table_base = None
+            base_register = None
+
+            for j in range(
+                i - 1,
+                max(-1, i - 10),
+                -1
+            ):
+
+                calc = instructions[j]
+
+                if calc.mnemonic not in {"addu", "daddu"}:
+                    continue
+
+                if calc.writes_register != target_reg:
+                    continue
+
+                if target_reg not in calc.source_registers:
+                    continue
+
+                other_registers = [
+                    r for r in calc.source_registers
+                    if r != target_reg
+                ]
+
+                if len(other_registers) != 1:
+                    continue
+
+                base_register = other_registers[0]
+
+                table_base = self._resolve_register_constant(
+                    instructions,
+                    j,
+                    base_register,
+                )
+
+                if table_base is not None:
+                    break
+
+            if table_base is None:
+                continue
+
+            switches.append({
+                "jump_address": jump.address,
+                "load_address": load.address,
+                "target_register": target_reg,
+                "index_register": target_reg,
+                "table_base": table_base,
+                "table_base_register": base_register,
+            })
+
+        return switches
+
+    def read_switch_table(
+        self,
+        table_base: int,
+        count: int = 16,
+    ) -> list[int]:
+
+        targets = []
+
+        for i in range(count):
+
+            entry_va = table_base + i * 4
+
+            offset = self.wrapper.va_to_offset(entry_va)
+
+            raw = self.wrapper.data[
+                offset:offset + 4
+            ]
+
+            if len(raw) != 4:
+                raise ValueError(
+                    f"Could not read switch entry "
+                    f"at {entry_va:08X}"
+                )
+
+            target = struct.unpack(
+                "<I",
+                raw
+            )[0]
+
+            targets.append(target)
+
+        return targets
+
+
     def process_indirect_jump(
         self,
         node: ExecutionNode,
     ):
-        raise NotImplementedError(
-            f"Indirect jump at "
-            f"{node.address:08X} is not a return "
-            f"and switch handling has not been implemented yet."
+
+        insn = node.instruction
+
+        if insn is None:
+            return []
+
+        # ---------------------------------------------------------
+        # Find the switch corresponding to this JR.
+        # ---------------------------------------------------------
+
+        switch = self.switches_by_jump_va.get(
+            node.address
         )
+
+        if switch is None:
+            raise ValueError(
+                f"Could not find switch table for "
+                f"indirect jump at {node.address:08X}"
+            )
+
+        # ---------------------------------------------------------
+        # Execute the delay slot.
+        # ---------------------------------------------------------
+
+        delay_address = node.address + 4
+
+        delay_insn = self.instructions_by_va.get(
+            delay_address
+        )
+
+        if delay_insn is None:
+            raise ValueError(
+                f"Missing delay slot at "
+                f"{delay_address:08X}"
+            )
+
+        registers = copy_registers(node.registers)
+
+        if delay_insn.kind == "register_write":
+            registers = execute_instruction(
+                registers,
+                delay_insn,
+            )
+
+        elif delay_insn.kind == "other":
+            pass
+
+        else:
+            raise ValueError(
+                f"Unexpected delay-slot instruction at "
+                f"{delay_address:08X}: "
+                f"{delay_insn.mnemonic}"
+            )
+
+        # ---------------------------------------------------------
+        # Read all switch destinations.
+        # ---------------------------------------------------------
+
+        targets = self.read_switch_table(
+            switch["table_base"],
+            count=16,
+        )
+
+        # ---------------------------------------------------------
+        # Create one child for every possible case.
+        # ---------------------------------------------------------
+
+        successors = []
+
+        for target in targets:
+
+            child, changed = self.get_or_create_node(
+                parent=node,
+                address=target,
+                registers=copy_registers(registers),
+            )
+
+            successors.append(
+                (child, changed)
+            )
+
+        return successors
+
+
+    def read_switch_table(
+        self,
+        table_va: int,
+        count: int = 16
+    ) -> list[int]:
+
+        targets = []
+
+        for i in range(count):
+
+            entry_va = table_va + i * 4
+
+            offset = self.wrapper.va_to_offset(
+                entry_va
+            )
+
+            target = struct.unpack(
+                "<I",
+                self.wrapper.data[offset:offset + 4],
+            )[0]
+
+            targets.append(target)
+
+        return targets
 
     def process_node(self, node: ExecutionNode):
 
@@ -742,51 +1179,228 @@ class ControlFlowAnalyzer:
         return [(child, changed)]
 
 
+    def get_dialogue_info(self, root: ExecutionNode, wrapper: SceneFunctionsWrapper, dialogue_dict = {}):
+        visited = set()
+
+        def visit(node: ExecutionNode, depth: int):
+            
+            node_id = id(node)
+            
+            if node_id in visited:
+                #print(f"{indent}    [already visited]")
+                return
+
+            visited.add(node_id)
+            if node.instruction is not None and check_if_important_jal(node.instruction.op_str):
+                registers = self.get_state_after_delay_slot(node)
+                # We get the dialogue
+
+                dialogue_address = registers.get('a0').value
+                calls_list = dialogue_dict.get(dialogue_address)
+                if calls_list is None:
+                    dialogue_dict[dialogue_address] = []
+                dialogue_dict[dialogue_address].append(node.address)
 
 
+            for child in node.children:
+                visit(child, depth + 1)
 
-def print_graph(root: ExecutionNode):
+        visit(root, 0)
 
-    visited = set()
 
-    def visit(node: ExecutionNode, depth: int):
+        return dialogue_dict
 
-        indent = ""#"    " * depth
 
-        if node.instruction is None:
-            print(f"{indent}ROOT")
-        else:
-            print(
-                f"{indent}{node.address:08X}: "
-                f"{node.instruction.op_str}"
+    def print_graph(self, root: ExecutionNode, wrapper: SceneFunctionsWrapper):
+
+        visited = set()
+
+        def visit(node: ExecutionNode, depth: int):
+            
+            indent = ""#"    " * depth
+            '''
+            if node.instruction is None:
+                print(f"{indent}ROOT")
+            else:
+                print(
+                    f"{indent}{node.address:08X}: "
+                    f"{node.instruction.op_str}"
+                )
+            '''
+            node_id = id(node)
+            
+            if node_id in visited:
+                #print(f"{indent}    [already visited]")
+                return
+
+            visited.add(node_id)
+            if node.instruction is not None and check_if_important_jal(node.instruction.op_str):
+                registers = self.get_state_after_delay_slot(node)
+                # We get the dialogue
+                print(f"{node.address:08X}")
+                print(wrapper.read_string_at_va(registers.get('a0').value))
+
+                '''
+                for reg, state in registers.items():
+                    if (
+                        state.value != 0
+                        or state.low_instruction is not None
+                        or state.high_instruction is not None
+                    ):
+                        print(
+                            f"{indent}    "
+                            f"{reg}: value={state.value if state.value is UNKNOWN or state.value is None else hex(state.value)}, "
+                            f"low={state.low_instruction}, "
+                            f"high={state.high_instruction}"
+                        )
+                '''
+
+            for child in node.children:
+                visit(child, depth + 1)
+
+        visit(root, 0)
+
+
+    def build_call_graph(self, execution_root: ExecutionNode):
+
+        # ---------------------------------------------------------
+        # Every important JAL discovered during execution analysis.
+        # ---------------------------------------------------------
+
+        calls_by_address = {
+            call.call_address: call
+            for call in self.function_calls
+        }
+
+        # ---------------------------------------------------------
+        # Create one CallNode for every FunctionCall.
+        # ---------------------------------------------------------
+
+        call_nodes = {
+            address: CallNode(call=call)
+            for address, call in calls_by_address.items()
+        }
+
+        # ---------------------------------------------------------
+        # Find the important JALs that are reachable from each
+        # execution path.
+        # ---------------------------------------------------------
+
+        visited = set()
+
+        def find_calls(
+            node: ExecutionNode,
+            previous_call: CallNode | None,
+        ):
+
+            # The state of the traversal includes the previous call.
+            #
+            # This matters because execution nodes can merge.
+            key = (
+                id(node),
+                id(previous_call) if previous_call is not None else None,
             )
 
-        node_id = id(node)
+            if key in visited:
+                return
 
-        if node_id in visited:
-            print(f"{indent}    [already visited]")
-            return
+            visited.add(key)
 
-        visited.add(node_id)
+            # -----------------------------------------------------
+            # Is this an important JAL?
+            # -----------------------------------------------------
 
-        for reg, state in node.registers.items():
-            if (
-                state.value != 0
-                or state.low_instruction is not None
-                or state.high_instruction is not None
-            ):
-                print(
-                    f"{indent}    "
-                    f"{reg}: value={state.value if state.value is UNKNOWN or state.value is None else hex(state.value)}, "
-                    f"low={state.low_instruction}, "
-                    f"high={state.high_instruction}"
+            call = calls_by_address.get(node.address)
+
+            if call is not None:
+
+                current_call = call_nodes[node.address]
+
+                # If we reached this JAL from another important JAL,
+                # connect them.
+                if previous_call is not None:
+                    previous_call.add_child(current_call)
+
+                previous_call = current_call
+
+            # -----------------------------------------------------
+            # Continue through ALL execution children.
+            # -----------------------------------------------------
+
+            for child in node.children:
+                find_calls(
+                    child,
+                    previous_call,
                 )
 
-        for child in node.children:
-            visit(child, depth + 1)
+        find_calls(
+            execution_root,
+            None,
+        )
 
-    visit(root, 0)
+        # ---------------------------------------------------------
+        # Find root calls.
+        #
+        # A CallNode is a root if nothing points to it.
+        # ---------------------------------------------------------
 
+        has_parent = set()
+
+        for node in call_nodes.values():
+            for child in node.children:
+                has_parent.add(id(child))
+
+        roots = [
+            node
+            for node in call_nodes.values()
+            if id(node) not in has_parent
+        ]
+
+        return roots, call_nodes
+
+
+    def print_call_graph(self, roots):
+
+        visited = set()
+
+        def visit(node: CallNode, depth: int):
+
+            indent = "    " * depth
+
+            call = node.call
+
+            print(
+                f"{indent}JAL {call.call_address:08X} "
+                f"-> {call.function_address:08X}"
+            )
+
+            for register, state in call.registers.items():
+
+                if state.value is UNKNOWN:
+                    value = "UNKNOWN"
+                else:
+                    value = f"0x{state.value:X}"
+
+                print(
+                    f"{indent}    "
+                    f"{register} = {value}"
+                )
+
+            node_id = id(node)
+
+            if node_id in visited:
+                print(
+                    f"{indent}    [already visited]"
+                )
+                return
+
+            visited.add(node_id)
+
+            for child in node.children:
+                visit(child, depth + 1)
+
+        for root in roots:
+            visit(root, 0)
 
 
 #--------------------------------------------------------------------------#
@@ -867,7 +1481,8 @@ def write_low32(
         return
 
     state = registers[register]
-    if state.value is not UNKNOWN and value is not UNKNOWN:
+    if state.value is not UNKNOWN and value is not UNKNOWN \
+    and state.value is not None and value is not None:
         state.value = (
             state.value & 0xFFFFFFFF00000000
         ) | (value & MASK32)
@@ -1310,3 +1925,7 @@ def execute_instruction(
         )
         '''
         return new_registers
+
+
+    
+        

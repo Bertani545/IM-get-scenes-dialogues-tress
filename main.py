@@ -12,9 +12,66 @@ if __name__ == "__main__":
     wrapper = fn.SceneFunctionsWrapper(executable_path)
     decoder = MIPSDecoder()
 
+    idx = 50
+    dialogues = dict()
+    func_va, func_name, func_bytes = wrapper.get_function_info(idx)
+    instructions = decoder.decode(
+        func_bytes,
+        func_va,
+        constants.interesting_jals
+    )
+    analyzer = controlFlow.ControlFlowAnalyzer(instructions, wrapper)
+    root = analyzer.analyze(func_va)
+    analyzer.get_dialogue_info(root, wrapper, dialogues)
+    analyzer.print_graph(root, wrapper)
+    
+
+    roots, call_nodes = analyzer.build_call_graph(root)
+    #print(roots)
+    analyzer.print_call_graph(roots)
+
+
+    #print(jal_root)
+    try:
+        print()
+
+        #analyzer.get_dialogue_info(root, wrapper, dialogues)
+        #analyzer.print_graph(root, wrapper)
+        #print(f"{func_name}")
+    except:
+        print(f"Error con la función {idx}, {func_name}, {func_va}")
+
+    '''
+    dialogues = dict()
+    for idx in range(1,796):
+        try:
+            func_va, func_name, func_bytes = wrapper.get_function_info(idx)
+            instructions = decoder.decode(
+                func_bytes,
+                func_va,
+                constants.interesting_jals
+            )
+            analyzer = controlFlow.ControlFlowAnalyzer(instructions, wrapper)
+            root = analyzer.analyze(func_va)
+
+            analyzer.get_dialogue_info(root, wrapper, dialogues)
+            #analyzer.print_graph(root, wrapper)
+            #print(f"{func_name}")
+        except:
+            print(f"Error con la función {idx}, {func_name}, {func_va}")
+
+    for dialogue_va, calls_list in dialogues.items():
+        if dialogue_va is None:
+            print(calls_list)
+            continue
+        if len(calls_list) > 1:
+            print(wrapper.read_string_at_va(dialogue_va))
+            print(f"Called {len(calls_list)}")
+    '''
+
     #try:
-    if True:
-        idx = 136#770
+    if False:
+        idx = 749#136#770
         func_va, func_name, func_bytes = wrapper.get_function_info(idx)
 
         instructions = decoder.decode(
@@ -45,100 +102,8 @@ if __name__ == "__main__":
 
         print("Flow stuff \n")
         # Start all (relevant) registers at 0 with no instructions
-        analyzer = controlFlow.ControlFlowAnalyzer(instructions)
-        root = analyzer.analyze(func_va)
-        controlFlow.print_graph(root)
-        '''
-        registers = controlFlow.create_initial_register_state()
-        instructions_by_va = {instruct.address : instruct for instruct in instructions}
-        controlFlow.start_traverse(func_va, instructions_by_va)
-
-        state = registers
-        for insn in instructions:
-
-            if insn.address in {
-                0x002BF094,
-                0x002BF098,
-                0x002BF09C,
-                0x002BF0A0,
-                0x002BF0A4,
-            }:
-                state = execute_instruction(
-                    state,
-                    insn,
-                )
-
-                print(
-                    f"{insn.address:08X}: "
-                    f"{insn.mnemonic:<6} "
-                    f"{insn.op_str:<20}"
-                )
-
-                for reg in ["v0", "v1"]:
-                    reg_state = state[reg]
-
-                    low = (
-                        f"{reg_state.low_instruction.address:08X}"
-                        if reg_state.low_instruction
-                        else "None"
-                    )
-
-                    high = (
-                        f"{reg_state.high_instruction.address:08X}"
-                        if reg_state.high_instruction
-                        else "None"
-                    )
-
-                    print(
-                        f"    {reg}: "
-                        f"value={reg_state.value!r}, "
-                        f"low={low}, "
-                        f"high={high}"
-                    )
-
         
-        '''
-    #except Exception as e:
-    #    print(f"Error: {e}")
+        analyzer = controlFlow.ControlFlowAnalyzer(instructions, wrapper)
+        root = analyzer.analyze(func_va)
 
-
-
-
-
-    '''
-        for i, insn in enumerate(instructions):
-
-            if (
-                insn.mnemonic in {"addu", "daddu"}
-                and insn.writes_register == "v0"
-                and "v1" in insn.source_registers
-            ):
-                table_base = decoder._resolve_register_constant(
-                    instructions,
-                    i,
-                    "v1",
-                )
-
-                print(
-                    f"Possible switch table base: "
-                    f"{table_base:#010x}"
-                )
-
-        for insn in instructions:
-            if insn.mnemonic in {"lui", "addiu"}:
-                print(
-                    f"{insn.address:08X}: "
-                    f"{insn.mnemonic:<6} "
-                    f"{insn.op_str:<25} "
-                    f"writes={insn.writes_register} "
-                    f"reads={insn.source_registers} "
-                    f"imm={insn.immediate:#x}"
-                )
-
-        print(f"Index:            {idx}")
-        print(f"Function Name:  {func_name}")
-        print(f"Virtual Address:{hex(func_va)}")
-        print(f"File Offset:    {hex(wrapper.va_to_offset(va))}")
-        print(f"Byte Count:        {len(func_bytes)} bytes")
-        print(f"Machine Code:   {func_bytes.hex()}")
-    '''
+        analyzer.print_graph(root, wrapper)

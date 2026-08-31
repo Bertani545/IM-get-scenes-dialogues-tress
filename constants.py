@@ -7,9 +7,32 @@ interesting_jals = {
     0x133910, #Girls
     0x133780, #Girls2
     0x1335b0, #Option selector (for 3)
-    0x1334c0, # Option selector (4) should not be touched
+    #0x1334c0, # Option selector (4) should not be touched
     0x12f970, #Displays items description (This one should not be touched)
 }
+
+def check_if_important_jal(ins_str):
+    try:
+        val = int(ins_str,16)
+        return val in interesting_jals
+    except:
+        return False
+
+def check_if_important_jal_int(val):
+    return val in interesting_jals
+
+function_registers = {
+    0x133700: ["a0", "a1"], #Black dialogue
+    0x133ad0: ["a0"], #MC
+    0x133910: ["a0", "a1", "a2"], #Girls
+    0x133780: ["a0", "a1", "a2"], #Girls2
+    0x1335b0: ["a0", "a1", "a2", "a3"], #Option selector (for 3)
+    
+    #0x12f970, #Displays items description (This one should not be touched now)
+
+    #0x1334c0, # Option selector (4) Especial case that I prefer doing later because it works different
+}
+
 
 '''
 interesting_jals = {
