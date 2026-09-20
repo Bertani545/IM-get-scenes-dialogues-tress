@@ -416,9 +416,13 @@ class ControlFlowAnalyzer:
 
     def __init__(
         self,
+        function_va,
+        function_name,
         instructions: list[DecodedInstruction],
         wrapper
     ):
+        self.function_va = function_va
+        self.name = function_name
         self.instructions_by_va = {
             insn.address: insn
             for insn in instructions
@@ -548,7 +552,6 @@ class ControlFlowAnalyzer:
 
     def analyze(
         self,
-        function_va: int,
     ) -> ExecutionNode:
 
         initial_registers = create_initial_register_state()
@@ -708,7 +711,7 @@ class ControlFlowAnalyzer:
 
             required_registers = function_registers[
                 function_address
-            ]
+            ]["registers"]
 
             call_registers = {
                 register: copy_one_register(
@@ -727,7 +730,9 @@ class ControlFlowAnalyzer:
                 registers=call_registers,
             )
 
-            self.function_calls.append(call)
+            try_find = filter(lambda x: x.call_address == call.call_address , self.function_calls)
+            if len(list(try_find)) == 0:
+                self.function_calls.append(call)
 
 
 
@@ -1179,7 +1184,7 @@ class ControlFlowAnalyzer:
         return [(child, changed)]
 
 
-    def get_dialogue_info(self, root: ExecutionNode, wrapper: SceneFunctionsWrapper, dialogue_dict = {}):
+    def get_dialogue_info(self, root: ExecutionNode, dialogue_dict = {}):
         visited = set()
 
         def visit(node: ExecutionNode, depth: int):
@@ -1211,7 +1216,7 @@ class ControlFlowAnalyzer:
         return dialogue_dict
 
 
-    def print_graph(self, root: ExecutionNode, wrapper: SceneFunctionsWrapper):
+    def print_graph(self, root: ExecutionNode):
 
         visited = set()
 
@@ -1238,7 +1243,7 @@ class ControlFlowAnalyzer:
                 registers = self.get_state_after_delay_slot(node)
                 # We get the dialogue
                 print(f"{node.address:08X}")
-                print(wrapper.read_string_at_va(registers.get('a0').value))
+                print(self.wrapper.read_string_at_va(registers.get('a0').value))
 
                 '''
                 for reg, state in registers.items():
@@ -1401,6 +1406,171 @@ class ControlFlowAnalyzer:
 
         for root in roots:
             visit(root, 0)
+
+    # --------------------------------------  Dialogue stuff ---------------------------------------
+    def extract_dialogue_from_call(self, call):
+        definition = function_registers.get(call.function_address)
+        if definition is None:
+            return None
+
+        dialogues = []
+
+        #print(hex(call.call_address))
+        for register in definition["dialogue"]:
+            state = call.registers.get(register)
+
+            if state is None:
+                raise ValueError(
+                    f"Missing register {register} for "
+                    f"call at {call.call_address:08X}"
+                )
+
+            if state.value is UNKNOWN:
+                raise ValueError(
+                    f"UNKNOWN value in {register} for "
+                    f"call at {call.call_address:08X}"
+                )
+
+            text_address = state.value
+            #print("   "+ hex(text_address))
+            if text_address == 0:
+                # Special case
+                dialogues.append({
+                    "register": register,
+                    "call_address": call.call_address,
+                    "function_address": call.function_address,
+                    "text_address": 0,
+                    "original": "",
+                })
+                continue
+            try:
+                original = self.wrapper.read_string_at_va(text_address)
+            except (ValueError, IndexError):
+                raise ValueError(
+                    f"Invalid dialogue address "
+                    f"{text_address:08X} at call {call.call_address:08X}"
+                )
+
+            dialogues.append({
+                "register": register,
+                "call_address": call.call_address,
+                "function_address": call.function_address,
+                "text_address": text_address,
+                "original": original,
+            })
+
+        return dialogues
+
+
+    def extract_scene_dialogues(self, scene_va):
+        analysis = self.analyze(scene_va)
+
+        dialogues = []
+
+        for call in self.function_calls:
+            dialogue = self.extract_dialogue_from_call(call)
+
+            if dialogue is not None:
+                dialogues.append(dialogue)
+
+        return dialogues
+
+    def extract_scene_information(self, scene_va):
+        analysis = self.analyze(scene_va)
+
+        calls = []
+
+        for call in self.function_calls:
+            call_info = self.extract_call(call)
+
+            if call_info is not None:
+                calls.append(call_info)
+
+        return calls
+
+    def extract_call(self, call):
+        definition = function_registers.get(call.function_address)
+
+        if definition is None:
+            return None
+
+        registers = {}
+
+        for register in definition["registers"]:
+            state = call.registers.get(register)
+
+            if state is None:
+                raise ValueError(
+                    f"Missing {register} at call "
+                    f"{call.call_address:08X}"
+                )
+
+            registers[register] = {
+                "value": state.value,
+                "low_instruction": (
+                    state.low_instruction.address
+                    if state.low_instruction else None
+                ),
+                "high_instruction": (
+                    state.high_instruction.address
+                    if state.high_instruction else None
+                ),
+            }
+
+        dialogues = []
+
+        for register in definition["dialogue"]:
+            state = call.registers[register]
+
+            if state.value is UNKNOWN:
+                raise ValueError(
+                    f"UNKNOWN dialogue register {register} at "
+                    f"{call.call_address:08X}"
+                )
+
+            text_address = state.value
+            if text_address == 0:
+                dialogues.append({
+                    "register": register,
+                    "text_address": text_address,
+                    "original": "",
+                })
+                continue
+
+            original = self.wrapper.read_string_at_va(text_address)
+
+            dialogues.append({
+                "register": register,
+                "text_address": text_address,
+                "original": original,
+            })
+
+        return {
+            "call_address": call.call_address,
+            "function_address": call.function_address,
+            "registers": registers,
+            "dialogues": dialogues,
+        }
+
+
+
+
+    def extract_scene(self, scene_va):
+        analysis = self.analyze(scene_va)
+
+        calls = []
+
+        for call in self.analyzer.function_calls:
+            extracted = self.extract_call(call)
+
+            if extracted is not None:
+                calls.append(extracted)
+
+        return {
+            "scene": scene.number,
+            "name": scene.name,
+            "calls": calls,
+        }
 
 
 #--------------------------------------------------------------------------#

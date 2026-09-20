@@ -22,8 +22,8 @@ if __name__ == "__main__":
     )
     analyzer = controlFlow.ControlFlowAnalyzer(instructions, wrapper)
     root = analyzer.analyze(func_va)
-    analyzer.get_dialogue_info(root, wrapper, dialogues)
-    analyzer.print_graph(root, wrapper)
+    analyzer.get_dialogue_info(root, dialogues)
+    analyzer.print_graph(root)
     
 
     roots, call_nodes = analyzer.build_call_graph(root)
