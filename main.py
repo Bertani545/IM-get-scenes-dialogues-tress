@@ -20,7 +20,7 @@ if __name__ == "__main__":
         func_va,
         constants.interesting_jals
     )
-    analyzer = controlFlow.ControlFlowAnalyzer(instructions, wrapper)
+    analyzer = controlFlow.ControlFlowAnalyzer(func_va, func_name, instructions, wrapper)
     root = analyzer.analyze(func_va)
     analyzer.get_dialogue_info(root, dialogues)
     analyzer.print_graph(root)

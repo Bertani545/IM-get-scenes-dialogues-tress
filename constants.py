@@ -1,3 +1,10 @@
+class UnknownValue:
+    def __repr__(self):
+        return "UNKNOWN"
+
+    def __str__(self):
+        return "UNKNOWN"
+
 VA_OFFSET = 0xFFF80
 
 # Virtual Addresses of these functions

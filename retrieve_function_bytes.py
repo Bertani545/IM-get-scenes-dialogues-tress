@@ -7,10 +7,12 @@ class SceneFunctionsWrapper:
 		constants.VA_OFFSET = 0xFFF80
 		self.scene_array_va = 0x3071F0
 		self.n_functions = 797
+		self.n_effective_function = 796
 		
 		# Load the executable raw bytes into memory
 		with open(filepath, 'rb') as f:
 			self.data = f.read()
+
 
 	def va_to_offset(self, va: int) -> int:
 		"""Converts Virtual Address to raw file offset using the offset rule."""
@@ -78,7 +80,12 @@ class SceneFunctionsWrapper:
 
 		return func_va, func_name, func_bytes
 
-
+	def get_all_scenes_info():
+		scenes = []
+		for i in range(self.n_functions):
+			func_va, func_name, func_bytes = self.get_function_info(i)
+			info = dict(idx=i, va=func_va, name=func_name, bytes=func_bytes)
+			scenes.append(info)
 
 	def read_u32_at_va(self, va: int) -> int:
 	    offset = self.va_to_offset(va)
@@ -109,3 +116,4 @@ class SceneFunctionsWrapper:
 	        cases[case] = target_va
 
 	    return cases
+

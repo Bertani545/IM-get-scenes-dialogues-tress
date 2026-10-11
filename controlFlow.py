@@ -1,16 +1,11 @@
 from dataclasses import dataclass, field
 from decodeFunction import DecodedInstruction
 from typing import Optional
-from constants import check_if_important_jal, function_registers, check_if_important_jal_int
+from constants import check_if_important_jal, function_registers, check_if_important_jal_int, UnknownValue
 from retrieve_function_bytes import SceneFunctionsWrapper
 import struct
 
-class UnknownValue:
-    def __repr__(self):
-        return "UNKNOWN"
 
-    def __str__(self):
-        return "UNKNOWN"
 
 
 UNKNOWN = UnknownValue()
@@ -418,11 +413,13 @@ class ControlFlowAnalyzer:
         self,
         function_va,
         function_name,
+        function_id,
         instructions: list[DecodedInstruction],
         wrapper
     ):
         self.function_va = function_va
-        self.name = function_name
+        self.function_name = function_name
+        self.number = function_id
         self.instructions_by_va = {
             insn.address: insn
             for insn in instructions
@@ -557,13 +554,13 @@ class ControlFlowAnalyzer:
         initial_registers = create_initial_register_state()
 
         root = ExecutionNode(
-                address=function_va,
+                address=self.function_va,
                 registers=copy_registers(initial_registers),
                 instruction=None,
             )
         first_node, _ = self.get_or_create_node(
                 parent=root,
-                address=function_va,
+                address=self.function_va,
                 registers=initial_registers,
             )
 
@@ -1462,21 +1459,25 @@ class ControlFlowAnalyzer:
         return dialogues
 
 
-    def extract_scene_dialogues(self, scene_va):
-        analysis = self.analyze(scene_va)
+    def extract_scene_dialogues(self):
+        analysis = self.analyze()
 
         dialogues = []
 
         for call in self.function_calls:
-            dialogue = self.extract_dialogue_from_call(call)
+            try:
+                dialogue = self.extract_dialogue_from_call(call)
+            except:
+                dialogue = "COULDN'T PROCESS IT"
+                print(call)
 
             if dialogue is not None:
                 dialogues.append(dialogue)
 
         return dialogues
 
-    def extract_scene_information(self, scene_va):
-        analysis = self.analyze(scene_va)
+    def extract_scene_information(self):
+        analysis = self.analyze()
 
         calls = []
 
@@ -1509,11 +1510,11 @@ class ControlFlowAnalyzer:
                 "value": state.value,
                 "low_instruction": (
                     state.low_instruction.address
-                    if state.low_instruction else None
+                    if state.low_instruction and state.low_instruction != UNKNOWN else None
                 ),
                 "high_instruction": (
                     state.high_instruction.address
-                    if state.high_instruction else None
+                    if state.high_instruction and state.high_instruction != UNKNOWN else None
                 ),
             }
 
@@ -1536,13 +1537,17 @@ class ControlFlowAnalyzer:
                     "original": "",
                 })
                 continue
-
-            original = self.wrapper.read_string_at_va(text_address)
+            try:
+                original = self.wrapper.read_string_at_va(text_address)
+            except:
+                original = "COULDN'T PROCESS IT"
 
             dialogues.append({
                 "register": register,
                 "text_address": text_address,
                 "original": original,
+                "en": "",
+                "es": ""
             })
 
         return {
@@ -1555,23 +1560,24 @@ class ControlFlowAnalyzer:
 
 
 
-    def extract_scene(self, scene_va):
-        analysis = self.analyze(scene_va)
+    def extract_scene(self):
+        analysis = self.analyze()
 
         calls = []
 
-        for call in self.analyzer.function_calls:
+        for call in self.function_calls:
             extracted = self.extract_call(call)
 
             if extracted is not None:
                 calls.append(extracted)
 
         return {
-            "scene": scene.number,
-            "name": scene.name,
+            "scene": self.number,
+            "name": self.function_name,
             "calls": calls,
         }
 
+    
 
 #--------------------------------------------------------------------------#
 #                       This section is for instructions only              #
