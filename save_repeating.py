@@ -11,16 +11,10 @@ def build_repeated_dialogues(repeated):
         try:
             result[f"0x{text_address:08X}"] = {
                 "original": occurrences[0]["original"],
-                "occurrences": [
-                    {
-                        "scene": occurrence["scene"],
-                        "scene_name": occurrence["scene_name"],
-                        "call_address": occurrence["call_address"],
-                        "function_address": occurrence["function_address"],
-                        "register": occurrence["register"],
-                    }
-                    for occurrence in occurrences
-                ],
+                "metadata": occurrences[0]["metadata"],
+                "en": "",
+                "es": "",
+
             }
         except:
             print(text_address, occurrences)
@@ -37,8 +31,27 @@ if __name__ == "__main__":
     #analyzer = gameInfo.getSceneAnalyzer(127)
     #analyzer.analyze()
     #all_scenes = analyzer.extract_scene_dialogues()
-    print(json.dumps(json_struct, indent=3, ensure_ascii=False))
+    with open("repeated.json", "w") as f:
+            json.dump(
+                json_struct,
+                f,
+                ensure_ascii=False,
+                indent=4
+            )
+    #print(json.dumps(json_struct, indent=3, ensure_ascii=False))
 
 
 
 
+'''
+                "occurrences": [
+                    {
+                        "scene": occurrence["scene"],
+                        "scene_name": occurrence["scene_name"],
+                        "call_address": occurrence["call_address"],
+                        "function_address": occurrence["function_address"],
+                        "register": occurrence["register"],
+                    }
+                    for occurrence in occurrences
+                ],
+'''

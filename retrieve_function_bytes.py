@@ -30,6 +30,22 @@ class SceneFunctionsWrapper:
 			raise ValueError(f"Null-terminator not found for string at VA {hex(va)}")
 		return self.data[offset:end].decode('shift_jis', errors='replace')
 
+	def read_string_and_get_metadata(self, va: int)-> (str, str):
+		"""Reads a null-terminated ASCII string from a given virtual address.
+			Then checks for metada"""
+		offset = self.va_to_offset(va)
+		end = self.data.find(b'\x00', offset)
+		if end == -1:
+			raise ValueError(f"Null-terminator not found for string at VA {hex(va)}")
+		text = self.data[offset:end].decode('shift_jis', errors='replace')
+		if text == "":
+			return "", ""
+		if text[0] != "[":
+			return "", text
+		idx_end = text.find(']') + 1
+		return text[:idx_end], text[idx_end:]
+
+
 
 	def get_dialogue_at(self, va: str|int):
 		print(va)

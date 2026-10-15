@@ -1,14 +1,14 @@
 from dataclasses import dataclass, field
 from decodeFunction import DecodedInstruction
 from typing import Optional
-from constants import check_if_important_jal, function_registers, check_if_important_jal_int, UnknownValue
+from constants import check_if_important_jal, function_registers, check_if_important_jal_int, UNKNOWN
 from retrieve_function_bytes import SceneFunctionsWrapper
 import struct
 
 
 
 
-UNKNOWN = UnknownValue()
+
 
 
 def merge_value(a, b):
@@ -1518,7 +1518,7 @@ class ControlFlowAnalyzer:
                 ),
             }
 
-        dialogues = []
+        dialogues = {}
 
         for register in definition["dialogue"]:
             state = call.registers[register]
@@ -1531,24 +1531,27 @@ class ControlFlowAnalyzer:
 
             text_address = state.value
             if text_address == 0:
-                dialogues.append({
+                dialogues[register] = {
                     "register": register,
                     "text_address": text_address,
                     "original": "",
-                })
+                    "metadata": ""
+                }
                 continue
             try:
-                original = self.wrapper.read_string_at_va(text_address)
+                metadata, original = self.wrapper.read_string_and_get_metadata(text_address)#read_string_at_va(text_address)
             except:
                 original = "COULDN'T PROCESS IT"
+                metadata = ""
 
-            dialogues.append({
+            dialogues[register] = {
                 "register": register,
                 "text_address": text_address,
                 "original": original,
+                "metadata": metadata,
                 "en": "",
                 "es": ""
-            })
+            }
 
         return {
             "call_address": call.call_address,
@@ -1563,13 +1566,13 @@ class ControlFlowAnalyzer:
     def extract_scene(self):
         analysis = self.analyze()
 
-        calls = []
+        calls = {}
 
         for call in self.function_calls:
             extracted = self.extract_call(call)
 
             if extracted is not None:
-                calls.append(extracted)
+                calls[f"0x{call.call_address:08X}"] = extracted
 
         return {
             "scene": self.number,
