@@ -45,6 +45,25 @@ class GameInfoClass:
         self.scenes = scenes
         return scenes
 
+    def setToUseDefault(self, repeated_path):
+        repeated_dialogues = None
+        with open(repeated_path, "r") as f:
+            repeated_dialogues = json.load(f)
+        for scene in self.scenes:
+            for call in scene["calls"]:
+                call_info = scene["calls"][call]
+                for register in call_info["dialogues"]:
+                    location = call_info["dialogues"][register]["text_address"]
+                    if location is None:
+                        call_info["dialogues"][register]["use_default"] = False
+                        continue
+                    location = f"{location:08X}"
+                    if location in repeated_dialogues:
+                        call_info["dialogues"][register]["use_default"] = True
+                    else:
+                        call_info["dialogues"][register]["use_default"] = False
+
+
     def get_dialogue_occurrences(self):
         occurrences = []
 

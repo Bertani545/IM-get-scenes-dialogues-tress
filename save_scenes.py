@@ -8,6 +8,7 @@ if __name__ == "__main__":
     executable_path = "SLPS_255.47"
     gameInfo = gameInformation.GameInfoClass(executable_path)
     gameInfo.extract_all_scenes()
+    gameInfo.setToUseDefault('repeated.json')
     gameInfo.dump_dialogues("dialogues")
 
 
