@@ -18,7 +18,7 @@ if __name__ == "__main__":
     instructions = decoder.decode(
         func_bytes,
         func_va,
-        constants.interesting_jals
+        constants.function_registers
     )
     analyzer = controlFlow.ControlFlowAnalyzer(func_va, func_name, instructions, wrapper)
     root = analyzer.analyze(func_va)
@@ -49,7 +49,7 @@ if __name__ == "__main__":
             instructions = decoder.decode(
                 func_bytes,
                 func_va,
-                constants.interesting_jals
+                constants.function_registers
             )
             analyzer = controlFlow.ControlFlowAnalyzer(instructions, wrapper)
             root = analyzer.analyze(func_va)
@@ -77,7 +77,7 @@ if __name__ == "__main__":
         instructions = decoder.decode(
             func_bytes,
             func_va,
-            constants.interesting_jals
+            constants.function_registers
         )
 
         switches = decoder.find_switches(instructions)

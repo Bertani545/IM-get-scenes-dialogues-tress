@@ -1360,6 +1360,89 @@ class ControlFlowAnalyzer:
 
         return roots, call_nodes
 
+    def build_branch_graph(self, execution_root: ExecutionNode):
+        
+        def functionNode(function_address):
+            return {
+                "id": function_address,
+                "type": "dialogue",
+                #"data": function_address,
+                "children": []
+            }
+        # We don't care if it's a switch. We only need to make room for a branching op node
+        def branchNode(function_address):
+            return {
+                "id": function_address,
+                "type": "branch",
+                "children": []
+            }
+        def rootNode():
+            return {
+                "id": 0,
+                "type": "root",
+                "children": []
+            }
+
+        # Every important JAL discovered during execution analysis.
+        calls_by_address = {
+            call.call_address: call
+            for call in self.function_calls
+        }
+
+        visited = set()
+        created_nodes = {}
+        tree_nodes = []
+        tree_root = rootNode()
+        created_nodes[tree_root["id"]] = tree_root
+        tree_nodes.append(tree_root)
+
+        def find_calls(
+            node: ExecutionNode,
+            previous_call
+        ):
+            key = (
+                id(node),
+                id(previous_call) if previous_call is not None else None,
+            )
+
+            if key in visited:
+                return
+
+            visited.add(key)
+
+
+            tree_node = None
+            call = calls_by_address.get(node.address)
+
+            node_id = node.address
+            if node_id in created_nodes:
+                tree_node = created_nodes[node_id]
+            else:
+                if call is not None: # Is this an important JAL?
+                    tree_node = functionNode(node.address)
+                elif len(node.children) > 1: # It's a branch
+                    tree_node = branchNode(node.address)
+
+                created_nodes[node_id] = tree_node
+                tree_nodes.append(tree_node)
+
+            if tree_node is not None:
+                if tree_node not in previous_call["children"]:
+                    previous_call["children"].append(tree_node)
+                previous_call = tree_node
+
+            for child in node.children:
+                find_calls(child, previous_call)
+
+        
+        find_calls(
+            execution_root,
+            tree_root,
+        )
+
+
+        return tree_root, tree_nodes
+
 
     def print_call_graph(self, roots):
 

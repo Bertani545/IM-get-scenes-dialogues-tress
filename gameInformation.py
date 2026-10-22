@@ -27,7 +27,7 @@ class GameInfoClass:
         instructions = self.decoder.decode(
             func_bytes,
             func_va,
-            constants.interesting_jals
+            constants.function_registers
         )
         return controlFlow.ControlFlowAnalyzer(func_va, func_name, function_id, instructions, self.wrapper)
 
