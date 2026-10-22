@@ -13,43 +13,17 @@ class SceneTreeSerializer:
 
 	def __init__(
 		self,
-		executable_path: str,
 		dialogue_jsons_path: str,
+		tree_jsons_path: str,
 		repeated_path: str
 	):
-		self.wrapper = retrieve_function_bytes.SceneFunctionsWrapper(executable_path)
-		self.decoder = decodeFunction.MIPSDecoder()
-		self.jsons_path = dialogue_jsons_path
+		self.dialogues_path = dialogue_jsons_path
+		self.trees_path  = tree_jsons_path
 		self.repeating_dialogues = None
 		self.get_repeating(repeated_path)
-		self.analyzer = None
-		self.scene_json = None
 
 	def __del__(self):
 		pass
-
-	def get_scene_tree(self, scene_id):
-		self.getSceneAnalyzer(scene_id)
-		self.load_json(scene_id)
-		return self.serialize_tree()
-
-
-	def getSceneAnalyzer(self, function_id):
-		func_va, func_name, func_bytes = self.wrapper.get_function_info(function_id)
-		instructions = self.decoder.decode(
-			func_bytes,
-			func_va,
-			constants.interesting_jals
-		)
-		self.analyzer = controlFlow.ControlFlowAnalyzer(func_va, func_name, function_id, instructions, self.wrapper)
-
-		#extract_dialogue_from_call from controlFlow works pretty similar
-
-	def load_json(self, function_id):
-		file_name = f"scene_{function_id:03}.json"
-		path  = os.path.join(self.jsons_path, file_name)
-		with open(path) as f:
-			self.scene_json = json.load(f)
 
 	def get_repeating(self, json_path):
 		file_name = "repeated.json"
@@ -57,25 +31,37 @@ class SceneTreeSerializer:
 		with open(path) as f:
 			self.repeating_dialogues = json.load(f)
 
-	def parseNode(self, key, node):
+	def load_scene_dialogues(self, id_scene):
+		file_name = f"scene_{id_scene:03}.json"
+		path  = os.path.join(self.dialogues_path, file_name)
+		scene_json = None
+		with open(path) as f:
+			scene_json = json.load(f)
+		return scene_json
+
+	def load_scene_tree(self, id_scene):
+		file_name = f"tree_{id_scene:03}.json"
+		path  = os.path.join(self.trees_path, file_name)
+		tree_json = None
+		with open(path) as f:
+			tree_json = json.load(f)
+		return tree_json
+
+	def get_scene_tree(self, scene_id):
+		dialogues_json = self.load_scene_dialogues(scene_id)
+		tree_json = self.load_scene_tree(scene_id)
+		return self.serialize_tree(dialogues_json, tree_json)
+
+	def parseNode(self, node, calls):
 
 		# Default for better reading
 		if node["type"] != "dialogue":
-			return { "id": key, "type": node["type"] }
+			return node
 
-		call_address = node["data"]
-		call_hex = f'0x{call_address:08X}'
 
-		json_dialogues = self.scene_json["calls"][call_hex]["dialogues"]
-		function_address = self.scene_json["calls"][call_hex]["function_address"]
-
-		node_dict = {
-			"id": key,
-			"type": "dialogue",
-			"function": f'0x{function_address:08X}'
-		}
-
+		call = calls[node["id"]]
 		dialogues = []
+		json_dialogues = call["dialogues"]
 		for register in json_dialogues:
 			dialogue_info = json_dialogues[register]
 			text_address = f"0x{dialogue_info["text_address"]:08X}"
@@ -89,7 +75,6 @@ class SceneTreeSerializer:
 				en = dialogue_info["en"]
 				es = dialogue_info["es"]
 
-
 			dialogues.append({
 				"register": register,
 				"text_address": text_address,
@@ -99,52 +84,33 @@ class SceneTreeSerializer:
 				"es": es,
 				"use_default": dialogue_info["use_default"]
 			})
-		node_dict["dialogues"] = dialogues
-		return node_dict
 
-
-
-	def parseEdge(self, parent_key, child_key):
-		return {
-			"id": f"{parent_key}-{child_key}",
-			"souce": parent_key,
-			"target": child_key
+		parsed_node = {
+			"id": node["id"],
+			"type": "dialogue",
+			"function": f"0x{call["function_address"]:08X}",
+			"dialogues": dialogues
 		}
+		return parsed_node
 
 
-	def serialize_tree(self):
-		root = self.analyzer.analyze()
-		root, _ = self.analyzer.build_branch_graph(root)
+	def serialize_tree(self, dialogues_json, tree_json):
+		tree_nodes = tree_json["nodes"]
+		tree_edges = tree_json["edges"]
+		calls = dialogues_json["calls"]
 
-		visited = set()
-		edges = []
-		nodes = {}
+		nodes = []
+		for node_id in tree_nodes:
+			nodes.append(self.parseNode(tree_nodes[node_id], calls))
 
-		def visit(node, parent_key = None):
-
-			key = f"0x{node["id"]:08X}"
-
-			if parent_key is not None:
-				edges.append(self.parseEdge(parent_key, key))
-
-			
-			if key in visited:
-				#print(f"[already visited]")
-				return
-
-			visited.add(key)
-
-			parsedNode = self.parseNode(key, node)
-
-			nodes[key] = parsedNode
-
-			for child in node["children"]:
-				visit(child, key)
-
-		visit(root)
-
-		return nodes, edges
-
+		serialized_tree = {
+			"scene": dialogues_json["scene"],
+    		"name": dialogues_json["name"],
+			"nodes": nodes,
+    		"edges": tree_edges 
+		}
+		return serialized_tree
+		
 
 if __name__ == '__main__':
 	import sys
@@ -153,13 +119,8 @@ if __name__ == '__main__':
 	except:
 		print("Couldn't obtain the scene number")
 		sys.exit()
-	serializer = SceneTreeSerializer('./SLPS_255.47', "./dialogues", "./")
-	nodes, edges = serializer.get_scene_tree(scene_n)
-
-	final_struct = {
-		"nodes": nodes,
-		"edges": edges
-	}
+	serializer = SceneTreeSerializer("./dialogues", "./trees", "./")
+	final_struct = serializer.get_scene_tree(scene_n)
 
 	print(json.dumps(final_struct, indent=4, ensure_ascii=False))
 	'''
