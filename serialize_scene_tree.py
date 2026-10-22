@@ -1,14 +1,6 @@
-from dataclasses import dataclass, field
-import controlFlow
-import retrieve_function_bytes
-import decodeFunction
-import constants
-from collections import defaultdict
-from pathlib import Path
 import json
 import os
 
-@dataclass
 class SceneTreeSerializer:
 
 	def __init__(
@@ -123,16 +115,6 @@ if __name__ == '__main__':
 	final_struct = serializer.get_scene_tree(scene_n)
 
 	print(json.dumps(final_struct, indent=4, ensure_ascii=False))
-	'''
-	for node in nodes:
-		print(node)
-		print(json.dumps(nodes[node], indent=4, ensure_ascii=False))
-		print()
-
-
-	for e in edges:
-		print(e)
-	'''
 
 
 
