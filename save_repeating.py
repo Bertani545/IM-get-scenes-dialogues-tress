@@ -17,9 +17,21 @@ def build_repeated_dialogues(repeated):
 
             }
         except:
-            print(text_address, occurrences)
+            json.dumps(occurrences)
 
     return result
+
+
+def dump_repeating_dialogues(raw_repeating):
+    json_struct = build_repeated_dialogues(raw_repeating)
+    with open("repeated.json", "w") as f:
+            json.dump(
+                json_struct,
+                f,
+                ensure_ascii=False,
+                indent=4
+            )
+
 
 if __name__ == "__main__":
     # 1. Load the executable
@@ -38,20 +50,3 @@ if __name__ == "__main__":
                 ensure_ascii=False,
                 indent=4
             )
-    #print(json.dumps(json_struct, indent=3, ensure_ascii=False))
-
-
-
-
-'''
-                "occurrences": [
-                    {
-                        "scene": occurrence["scene"],
-                        "scene_name": occurrence["scene_name"],
-                        "call_address": occurrence["call_address"],
-                        "function_address": occurrence["function_address"],
-                        "register": occurrence["register"],
-                    }
-                    for occurrence in occurrences
-                ],
-'''
