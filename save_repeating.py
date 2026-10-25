@@ -1,4 +1,5 @@
 import gameInformation
+import datetime
 import json
 # source .decompile/bin/activate
 # --- Usage Example ---
@@ -18,6 +19,14 @@ def build_repeated_dialogues(repeated):
             }
         except:
             json.dumps(occurrences)
+
+    final_struct = {
+        "dialogues": result,
+        "last_edit": {
+            "user": "bertani",
+            "time": str(datetime.datetime.now())
+        }
+    }
 
     return result
 
