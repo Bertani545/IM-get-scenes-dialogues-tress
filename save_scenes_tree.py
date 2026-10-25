@@ -48,7 +48,7 @@ class SceneTreeInfoClass:
 	def parseEdge(self, parent_key, child_key):
 		return {
 			"id": f"{parent_key}-{child_key}",
-			"souce": parent_key,
+			"source": parent_key,
 			"target": child_key
 		}
 
