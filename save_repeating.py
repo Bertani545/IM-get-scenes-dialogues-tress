@@ -28,7 +28,7 @@ def build_repeated_dialogues(repeated):
         }
     }
 
-    return result
+    return final_struct
 
 
 def dump_repeating_dialogues(raw_repeating):
