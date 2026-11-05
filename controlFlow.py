@@ -1618,7 +1618,9 @@ class ControlFlowAnalyzer:
                     "register": register,
                     "text_address": text_address,
                     "original": "",
-                    "metadata": ""
+                    "metadata": "",
+                    "en": "",
+                    "es": ""
                 }
                 continue
             try:
@@ -1733,6 +1735,20 @@ def unsigned_32(value: int) -> int:
         return UNKNOWN
     return value & MASK32
 
+def force_write(
+    registers: dict[str, RegisterState],
+    register: str,
+    value: int,
+    insn: DecodedInstruction,
+):
+    if register == "zero":
+        return
+    state = registers[register]
+    state.value =  value
+    state.low_instruction = insn
+    state.high_instruction = insn
+
+
 def write_low32(
     registers: dict[str, RegisterState],
     register: str,
@@ -1814,8 +1830,7 @@ def execute_instruction(
 
             dest = insn.writes_register
             source = insn.source_registers[0]
-
-            write_low32(
+            force_write(
                 new_registers,
                 dest,
                 new_registers[source].value,

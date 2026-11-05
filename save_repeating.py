@@ -13,6 +13,7 @@ def build_repeated_dialogues(repeated):
             result[f"0x{text_address:08X}"] = {
                 "original": occurrences[0]["original"],
                 "metadata": occurrences[0]["metadata"],
+                "type": f"0x{occurrences[0]["function_address"]:08X}",
                 "en": "",
                 "es": "",
 

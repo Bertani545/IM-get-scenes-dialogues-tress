@@ -58,7 +58,7 @@ class GameInfoClass:
                         call_info["dialogues"][register]["use_default"] = False
                         continue
                     location = f"0x{location:08X}"
-                    if location in repeated_dialogues:
+                    if location in repeated_dialogues["dialogues"]:
                         call_info["dialogues"][register]["use_default"] = True
                     else:
                         call_info["dialogues"][register]["use_default"] = False

@@ -12,7 +12,7 @@ if __name__ == "__main__":
     executable_path = "SLPS_255.47"
     gameInfo = gameInformation.GameInfoClass(executable_path)
     gameInfo.extract_all_scenes()
-
+    
     # Repeating
     raw_repeating = gameInfo.find_repeated_dialogues()
     save_repeating.dump_repeating_dialogues(raw_repeating)
@@ -24,3 +24,4 @@ if __name__ == "__main__":
     serializer = save_scenes_tree.SceneTreeInfoClass(executable_path)
     serializer.getSimplifiedTrees()
     serializer.dumpTrees("./trees")
+    
