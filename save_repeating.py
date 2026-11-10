@@ -9,6 +9,8 @@ def build_repeated_dialogues(repeated):
     result = {}
 
     for text_address, occurrences in repeated.items():
+        if text_address == 0:
+            continue
         try:
             result[f"0x{text_address:08X}"] = {
                 "original": occurrences[0]["original"],
